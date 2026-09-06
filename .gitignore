@@ -3,12 +3,14 @@
 .env.*
 !.env.example
 
-# Dependencies
-node_modules/
+# Python virtual environments
+venv/
+.venv/
+env/
 
-# Build/output
-dist/
-build/
+# Python cache
+__pycache__/
+*.py[cod]
 
 # Logs
 *.log
