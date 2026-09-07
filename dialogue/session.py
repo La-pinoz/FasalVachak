@@ -1,14 +1,17 @@
 import re
 
-from llm.prompts import CROP_DETECTION_PROMPT, DISAMBIGUATION_PROMPT, MANAGEMENT_PROMPT, FOLLOWUP_QA_PROMPT
+from llm.prompts import CROP_DETECTION_PROMPT, DISAMBIGUATION_PROMPT, MANAGEMENT_PROMPT, FOLLOWUP_QA_PROMPT, INTENT_CLASSIFICATION_PROMPT
 from llm.client import get_fast_llm_completion, get_reasoning_completion
 from llm.translation import translate_to_english
-from rag.retriever import get_candidates, get_disease_record
+# CHANGED: get_candidates -> get_all_candidates
+from rag.retriever import get_all_candidates, get_disease_record
 
 MAX_DISAMBIGUATION_QUESTIONS = 2
 MAX_FOLLOWUPS = 2
 
 GENERIC_ERROR_REPLY = "Maaf kijiyega, thodi dikkat aa gayi. Kripya dobara boliye."
+# CHANGED: added, was missing
+NO_MATCH_REPLY = "Maaf kijiyega, lakshan ke aadhar par main sahi bimari nahi pehchaan paa raha hoon. Kripya krishi visheshagya se sampark karein."
 
 
 class DialogueManager:
@@ -54,11 +57,10 @@ class DialogueManager:
                 f"[DialogueManager] Unhandled error in phase={self.phase}: {e}")
             return GENERIC_ERROR_REPLY
 
+    # CHANGED: re-indented into the class (was at column 0)
     async def _handle_crop_detection(self, text_en: str) -> str:
         """Phase 0: Figure out the crop from what the farmer says (may take multiple turns)."""
 
-        # Always bank this turn's text — it might contain symptom info even if
-        # it doesn't (yet) reveal the crop.
         self.pending_symptom_turns.append(text_en)
 
         prompt = CROP_DETECTION_PROMPT.format(farmer_text=text_en)
@@ -66,7 +68,6 @@ class DialogueManager:
         decision = llm_decision.strip().upper()
 
         if "OTHER_CROP" in decision:
-            # End the conversation if the farmer is asking about an unsupported crop
             self.phase = "completed"
             return "Maaf kijiyega, humari helpline abhi sirf Dhaan (Rice) aur Kapas (Cotton) ki bimariyon ke baare mein jaankari de sakti hai. Call karne ke liye dhanyawad, namaste."
 
@@ -77,36 +78,41 @@ class DialogueManager:
             self.crop = "cotton"
 
         elif "UNCLEAR" in decision or not self.crop:
-            # If the LLM is unsure, or if we hit a weird edge case fallback
             return "Maaf kijiyega, main theek se samajh nahi paaya. Kya aap bata sakte hain ki yeh samasya dhaan (rice) ki hai ya kapas (cotton) ki?"
 
-        # Crop is now known — combine EVERYTHING said so far (across however many
-        # turns it took) into the symptom text used for retrieval, not just this
-        # last confirmation message.
         self.symptoms_text = " ".join(self.pending_symptom_turns)
         self.phase = "symptom_diagnosis"
 
-        self.candidates_text = get_candidates(self.crop, self.symptoms_text)
-        self.candidate_names = self._parse_candidate_names(
-            self.candidates_text)
+        # CHANGED: fetch every disease record for this crop, not a vector top-k.
+        candidate_records = get_all_candidates(self.crop)
+
+        if not candidate_records:
+            # Defensive: crop detected but somehow no KB entries for it — don't proceed
+            # into a disambiguation prompt with an empty candidate list.
+            self.phase = "completed"
+            print(
+                f"[DialogueManager] No candidate records found for crop={self.crop!r}")
+            return "Maaf kijiyega, abhi mere paas is fasal ki bimariyon ki jaankari uplabdh nahi hai. Kripya krishi visheshagya se sampark karein."
+
+        self.candidate_names = [r.get("disease_name", "")
+                                for r in candidate_records]
+        self.candidates_text = self._format_candidates_text(candidate_records)
 
         return await self._trigger_llm_turn()
 
     async def _handle_disambiguation(self, text_en: str) -> str:
         """Phase 1: Handles the farmer's answers to our clarifying questions (in English)."""
         self.qa_history.append(f"Farmer: {text_en}")
-        self.questions_asked += 1
+        # CHANGED: questions_asked increment removed from here — now owned solely by
+        # _trigger_llm_turn's ASK branch, to avoid double-counting per round-trip.
         return await self._trigger_llm_turn()
 
     async def _trigger_llm_turn(self) -> str:
-        """The Reasoning Engine for Phase 1. Decides whether to ASK or ANSWER."""
+        """The Reasoning Engine for Phase 1. Decides whether to ASK, ANSWER, or NO_MATCH."""
 
-        if self.questions_asked >= MAX_DISAMBIGUATION_QUESTIONS:
-            forced_disease = self.candidate_names[0] if self.candidate_names else None
-            if forced_disease:
-                self.identified_disease = forced_disease
-                return await self._generate_management_plan()
-            return "Maaf kijiyega, lakshan ke aadhar par main sahi bimari nahi pehchaan paa raha hoon. Kripya krishi visheshagya se sampark karein."
+        # CHANGED: no more early-exit hardcoded fallback here — the LLM is always
+        # consulted, including on the final turn. DISAMBIGUATION_PROMPT itself
+        # handles how to conclude once questions_asked_so_far == max_questions.
 
         formatted_history = "\n".join(self.qa_history)
         prompt = DISAMBIGUATION_PROMPT.format(
@@ -117,8 +123,6 @@ class DialogueManager:
             max_questions=MAX_DISAMBIGUATION_QUESTIONS
         )
 
-        # Note: the ASK content the LLM produces here must be in Hindi (it's spoken to the
-        # farmer directly) — make sure DISAMBIGUATION_PROMPT instructs this explicitly.
         llm_output = await get_reasoning_completion(prompt)
         action, content = self._parse_action_content(llm_output)
 
@@ -127,15 +131,32 @@ class DialogueManager:
                 f"[DialogueManager] Could not parse reasoning output: {llm_output!r}")
             return "Maaf kijiye, main theek se samajh nahi paaya. Kya aap lakshan dobara bata sakte hain?"
 
+        # Safety net: the model shouldn't ask past the limit, but if it does, don't
+        # let the call loop forever — force a conclusion instead of trusting it blindly.
+        if action == "ASK" and self.questions_asked >= MAX_DISAMBIGUATION_QUESTIONS:
+            print(
+                f"[DialogueManager] Model asked past question limit, overriding. Raw: {llm_output!r}")
+            self.phase = "completed"
+            return NO_MATCH_REPLY
+
         if action == "ASK":
-            # Stored as-is (Hindi) in qa_history; DISAMBIGUATION_PROMPT reasons fine over
-            # a mixed-language history since the farmer side is consistently English.
             self.qa_history.append(f"Agent: {content}")
+            self.questions_asked += 1  # CHANGED: sole place questions_asked is incremented now
             return content
 
         elif action == "ANSWER":
+            # Safety net: only trust the disease name if it's actually one we offered.
+            if content not in self.candidate_names:
+                print(
+                    f"[DialogueManager] ANSWER did not match a candidate name: {content!r}")
+                self.phase = "completed"
+                return NO_MATCH_REPLY
             self.identified_disease = content
             return await self._generate_management_plan()
+
+        elif action == "NO_MATCH":
+            self.phase = "completed"
+            return NO_MATCH_REPLY
 
         else:
             print(
@@ -170,12 +191,9 @@ class DialogueManager:
         return f"{treatment_audio_text}\n\n{closing_question}"
 
     async def _handle_followup(self, text_en: str) -> str:
-        """Phase 3: The Follow-Up Loop (farmer input already translated to English)."""
-
-        intent_prompt = (
-            f"Classify the user's intent as either YES or NO based on this text: "
-            f"'{text_en}'. Only output YES or NO."
-        )
+        # CHANGED: was an inline f-string, now uses the imported template
+        intent_prompt = INTENT_CLASSIFICATION_PROMPT.format(
+            farmer_reply=text_en)
         intent_response = await get_fast_llm_completion(intent_prompt, temperature=0.0)
         intent = intent_response.strip().upper()
 
@@ -214,15 +232,6 @@ class DialogueManager:
         return action, content
 
     @staticmethod
-    def _parse_candidate_names(candidates_text: str):
-        names = []
-        for line in candidates_text.splitlines():
-            m = re.match(r"\s*\d+\.\s*([^:]+):", line)
-            if m:
-                names.append(m.group(1).strip())
-        return names
-
-    @staticmethod
     def _format_kb_record(kb_record: dict) -> str:
         if not kb_record:
             return "No knowledge base record available."
@@ -239,3 +248,23 @@ class DialogueManager:
             f"Management: {kb_record.get('management') or 'Not available.'}",
         ]
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_candidates_text(candidate_records: list[dict]) -> str:
+        """
+        Builds the {candidates} block for DISAMBIGUATION_PROMPT: one numbered line per
+        disease, full symptoms_bullets folded in after the colon. Keeps the same
+        'N. DiseaseName: ...' shape the rest of the system expects.
+        """
+        lines = []
+        for i, record in enumerate(candidate_records, start=1):
+            name = record.get("disease_name", "Unknown")
+            bullets = record.get("symptoms_bullets", [])
+            symptoms = " ".join(bullets) if bullets else "Not available."
+            lines.append(f"{i}. {name}: {symptoms}")
+        return "\n".join(lines)
+
+    # CHANGED: get_all_candidates REMOVED from this class entirely — it belongs in
+    # rag/retriever.py as a module-level function (see below), not as a method here.
+    # It was pasted in with no `self`/`@staticmethod` and referenced RAW_DISEASE_DB,
+    # a name that doesn't exist in this file.

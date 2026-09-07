@@ -19,6 +19,9 @@ OUTPUT:
 DISAMBIGUATION_PROMPT = """
 You are helping diagnose a crop problem for a farmer calling in by phone.
 You may ONLY consider the candidate diseases listed below — never suggest anything outside this list.
+The list below is the COMPLETE set of diseases known for this crop, not a filtered subset — if the
+evidence doesn't support any of them, that means the disease may genuinely be outside what this
+system knows, not that you should guess or default to the closest-sounding one.
 
 Farmer's original description (already translated to English): {symptom_text}
 
@@ -31,7 +34,17 @@ Conversation so far (Farmer turns are in English; Agent turns are in Hindi):
 Questions asked so far: {questions_asked_so_far} of a maximum of {max_questions}.
 
 Decide: do you have enough information to confidently identify which ONE of the candidates above
-matches, based only on symptoms, or do you need one more detail?
+matches, based only on symptoms, do you need one more detail, or does the evidence actually fit
+none of them?
+
+Before deciding, read every farmer turn carefully — a farmer's answer to a yes/no question often
+contains TWO separate pieces of evidence, not one:
+- The direct answer to what was actually asked (a confirmation or denial of that specific symptom).
+- Additional symptom detail the farmer volunteers unprompted, in the same sentence (e.g. "No, but
+  I also see X" or "Yes, and also Y"). This volunteered detail is real evidence and must be checked
+  against EVERY candidate's symptom list independently — do not let it get absorbed into the
+  verdict on whichever candidate the question happened to be testing. A "no" about one candidate's
+  symptom does not make the rest of that same sentence irrelevant to a DIFFERENT candidate.
 
 If you need more information AND the maximum has not been reached:
 - Before drafting the question, find the EXACT phrase, in the candidate list above, that the
@@ -45,30 +58,49 @@ If you need more information AND the maximum has not been reached:
 - Write this question in simple, natural, spoken Hindi (Devanagari script) — NOT English,
   NOT Hinglish/Roman script — since it will be read aloud to the farmer through text-to-speech.
   Use the kind of everyday Hindi a person would actually speak on a call, not formal/bookish Hindi.
-- Focus the question on whichever grounded symptom detail best separates the remaining candidates.
+- Focus the question on whichever grounded symptom detail best separates the remaining candidates,
+  taking into account any volunteered detail already given (see above) — don't ask about a symptom
+  the farmer has already confirmed or denied unprompted, even if you never asked it directly.
 - Never ask about anything not present, near-verbatim, in one of the candidate entries above.
 - Never repeat a question already asked in the conversation so far.
 
-If the maximum has been reached and you are still unsure, or if you are ready to answer:
-- Weigh the farmer's actual yes/no answers so far as evidence, not just as boxes checked.
-  A "no" to a question that tested a candidate's defining symptom is evidence AGAINST that
-  candidate, and must lower its likelihood — do not select a candidate whose one confirmed
-  distinguishing symptom the farmer denied, unless every other candidate is denied too.
-- Pick the single candidate that best fits ALL the evidence gathered (initial description
-  plus every answer given), not just the most recent answer.
+If the maximum has been reached, or you are ready to conclude (answer or no-match):
+- Score each candidate by NET evidence, not by a single disqualifying answer. For each candidate,
+  weigh ALL of its distinguishing symptoms against everything said so far (initial description,
+  direct answers, and volunteered detail) — count how many of its symptoms are confirmed versus
+  denied, across the WHOLE conversation, not just the most recent exchange.
+- A denied symptom lowers a candidate's likelihood but does NOT automatically disqualify it if
+  that same candidate has other symptoms that were confirmed elsewhere in the conversation
+  (including volunteered detail). Only treat a candidate as disqualified when a denied symptom was
+  essentially its only support, with nothing else about it confirmed.
+- Pick the single candidate with the strongest net evidence across the full conversation — not
+  necessarily the one the most recent question happened to be about.
 
-If you are confident (or forced to answer due to the maximum limit):
+If EVERY candidate ends up with zero or negative net support (no confirmed distinguishing symptoms
+for any of them, or every candidate's only support was later denied), conclude NO_MATCH instead of
+forcing a pick. This applies even when the maximum question limit has been reached: a forced but
+unsupported diagnosis is worse than honestly saying none of the known diseases fit, since a wrong
+diagnosis leads to the wrong treatment being recommended later. Do not reach NO_MATCH just because
+one candidate had a single denial — check its full net score first.
+
+If you are confident in ONE candidate (or forced to conclude, due to the maximum limit, and one
+candidate has clearly stronger net support than the rest):
 - Identify the exact candidate disease name, copied EXACTLY as written in the candidate list
   above (in English, unchanged) — this is used for an internal database lookup and must not
   be translated, reworded, or written in Hindi.
 - Do not invent or mention treatment, dosage, or timing — you have not been given that information.
 - Do not include justifications or conversational text in your answer output.
-- CONTENT must be a single line with nothing else after it — no extra fields, no explanation,
-  no trailing newline content of any kind, since it is parsed directly as a lookup key.
+
+If NO candidate has adequate net support:
+- Output NO_MATCH as described above. Do not pick a candidate just because the limit was reached.
 
 Respond in exactly this format, nothing else:
-ACTION: ASK or ANSWER
-CONTENT: <If ASK: the short clarifying question in Hindi (Devanagari). If ANSWER: the EXACT disease name in English from the list above, unchanged>
+ACTION: ASK or ANSWER or NO_MATCH
+CONTENT: <If ASK: the short clarifying question in Hindi (Devanagari). If ANSWER: the EXACT disease
+name in English from the list above, unchanged. If NO_MATCH: the single word NONE>
+
+CONTENT must be a single line with nothing else after it — no extra fields, no explanation, no
+trailing newline content of any kind, since it is parsed directly as a lookup key or dispatch flag.
 """
 
 SYMPTOM_TRANSLATION_PROMPT = """You are translating a farmer's spoken input from Hindi (which may include
@@ -189,4 +221,17 @@ Instructions for your response:
   knowledgeable agricultural advisor would.
 
 Now give the spoken Hindi response:
+"""
+
+INTENT_CLASSIFICATION_PROMPT = """A farmer was asked in Hindi: "Do you want more information about this disease?"
+Their reply, translated to English, was: "{farmer_reply}"
+
+Classify their intent as YES or NO:
+- Output YES if they said yes, or if their reply is itself a follow-up question or request
+  for more detail (e.g. asking about remedies, alternatives, dosage, causes, prevention) —
+  asking a question means they want more information, even with no explicit "yes".
+- Output NO only if they explicitly declined, said no more is needed, said thanks and nothing
+  else, or indicated they're done.
+
+Only output YES or NO.
 """

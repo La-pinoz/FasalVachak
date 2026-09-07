@@ -1,48 +1,25 @@
-import chromadb
-from chromadb.utils import embedding_functions
 from kb.database import FULL_KB_DICT
 
 # 1. Load the Master Knowledge Base into memory once
 MASTER_KB = FULL_KB_DICT
 
-# 2. Connect to the existing ChromaDB collection
-client = chromadb.PersistentClient(path="rag/chroma_symptoms_db_raw")
-embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="all-MiniLM-L6-v2"
-)
-collection = client.get_collection(
-    name="agri_symptoms",
-    embedding_function=embedding_func
-)
+# rag/retriever.py
 
 
-def get_candidates(crop: str, symptom_text: str, n_results: int = 3) -> str:
+# CHANGED: replaces get_candidates
+def get_all_candidates(crop: str) -> list[dict]:
     """
-    Filters candidates by crop and queries ChromaDB with the farmer's initial symptom text.
-    Returns a pre-formatted string ready to be injected into DISAMBIGUATION_PROMPT.
+    Returns every disease record for the given crop from MASTER_KB — the complete
+    set, not a similarity-narrowed subset. Disambiguation reasons over this full
+    list itself (via DISAMBIGUATION_PROMPT + qa_history), so no vector retrieval
+    or top-k cutoff happens here anymore.
     """
-    # Normalize crop name ("rice" -> "Rice", "cotton" -> "Cotton")
-    crop_filter = crop.strip().capitalize()
-
-    results = collection.query(
-        query_texts=[symptom_text],
-        n_results=n_results,
-        where={"crop": crop_filter}
-    )
-
-    candidate_lines = []
-    matched_ids = results["ids"][0]
-    # flattened symptoms_bullets text, same as what was embedded
-    matched_docs = results["documents"][0]
-
-    for idx, (disease_id, symptom_detail) in enumerate(zip(matched_ids, matched_docs), start=1):
-        record = MASTER_KB.get(disease_id, {})
-        disease_name = record.get("disease_name", disease_id)
-
-        # Matches your required prompt format: "1. {name}: {symptoms}"
-        candidate_lines.append(f"{idx}. {disease_name}: {symptom_detail}")
-
-    return "\n".join(candidate_lines)
+    crop_filter = crop.strip().capitalize(
+    )  # kept same normalization as before ("rice" -> "Rice")
+    return [
+        record for record in MASTER_KB.values()
+        if record.get("crop", "").strip() == crop_filter
+    ]
 
 
 def get_disease_record(disease_identifier: str) -> dict:
