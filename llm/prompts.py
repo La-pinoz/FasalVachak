@@ -6,9 +6,11 @@ Analyze the farmer's text and identify the crop.
 Rules:
 - If the farmer mentions rice, paddy, dhaan, or chawal, output exactly: RICE
 - If the farmer mentions cotton, kapas, or rui, output exactly: COTTON
-- If both crops are mentioned, or it is unclear, ambiguous, or a different crop entirely,
-  output exactly: UNKNOWN
-- Output ONLY one of these three words. No punctuation, no explanation, no extra text.
+- If the farmer clearly names a specific crop that is NOT rice or cotton (e.g. wheat, gehu,
+  sugarcane, ganna, maize, makka, or any other named crop), output exactly: OTHER_CROP
+- If both rice and cotton are mentioned together, or the farmer's text is too vague,
+  unclear, or off-topic to tell what they mean at all, output exactly: UNCLEAR
+- Output ONLY one of these four words. No punctuation, no explanation, no extra text.
 
 Farmer's text: "{farmer_text}"
 OUTPUT:
@@ -32,18 +34,28 @@ Decide: do you have enough information to confidently identify which ONE of the 
 matches, based only on symptoms, or do you need one more detail?
 
 If you need more information AND the maximum has not been reached:
+- Before drafting the question, find the EXACT phrase, in the candidate list above, that the
+  question is testing for. If you cannot point to a specific phrase in one of the candidate
+  entries that your question would confirm or rule out, do not ask that question — either ask
+  about a different, genuinely-present symptom detail instead, or answer with your best match
+  if no such grounded question exists.
 - Ask exactly ONE short question, answerable with yes/no or a single word.
 - Keep it to a single short sentence, under 12 words — it needs to be quick to say and quick
   to answer on a phone call, not a detailed or multi-part question.
 - Write this question in simple, natural, spoken Hindi (Devanagari script) — NOT English,
   NOT Hinglish/Roman script — since it will be read aloud to the farmer through text-to-speech.
   Use the kind of everyday Hindi a person would actually speak on a call, not formal/bookish Hindi.
-- Focus the question on whichever symptom detail best separates the remaining candidates.
-- Never ask about anything not present in one of the candidate entries above.
+- Focus the question on whichever grounded symptom detail best separates the remaining candidates.
+- Never ask about anything not present, near-verbatim, in one of the candidate entries above.
 - Never repeat a question already asked in the conversation so far.
 
-If the maximum has been reached and you are still unsure:
-- Pick the single candidate whose symptoms best match the evidence gathered so far.
+If the maximum has been reached and you are still unsure, or if you are ready to answer:
+- Weigh the farmer's actual yes/no answers so far as evidence, not just as boxes checked.
+  A "no" to a question that tested a candidate's defining symptom is evidence AGAINST that
+  candidate, and must lower its likelihood — do not select a candidate whose one confirmed
+  distinguishing symptom the farmer denied, unless every other candidate is denied too.
+- Pick the single candidate that best fits ALL the evidence gathered (initial description
+  plus every answer given), not just the most recent answer.
 
 If you are confident (or forced to answer due to the maximum limit):
 - Identify the exact candidate disease name, copied EXACTLY as written in the candidate list
@@ -51,6 +63,8 @@ If you are confident (or forced to answer due to the maximum limit):
   be translated, reworded, or written in Hindi.
 - Do not invent or mention treatment, dosage, or timing — you have not been given that information.
 - Do not include justifications or conversational text in your answer output.
+- CONTENT must be a single line with nothing else after it — no extra fields, no explanation,
+  no trailing newline content of any kind, since it is parsed directly as a lookup key.
 
 Respond in exactly this format, nothing else:
 ACTION: ASK or ANSWER
@@ -94,7 +108,8 @@ add any fact not present in it.
 
 Disease identified: {disease}
 
-Knowledge base information:
+Knowledge base information (each field is labelled; only the "management" field contains
+approved actions to recommend):
 {kb_context}
 
 Structure your response in this order:
@@ -102,17 +117,23 @@ Structure your response in this order:
    appears to be {disease} — phrase it as an assessment from the symptoms (e.g. the natural
    spoken-Hindi equivalent of "the symptoms you described match X disease"), not as an
    absolute, lab-confirmed fact.
-2. Brief explanation (1 sentence): what is happening to the plant, in simple terms.
-3. If the knowledge base includes cultural/preventive steps, mention ONE of the most
-   practical ones briefly.
-4. Chemical treatment: from the knowledge base, choose only ONE, or at most TWO, of the most
-   practical/commonly used products — do NOT list every product option given in the knowledge
-   base. Keep the product name(s), dosage, and units exactly as written in the knowledge base
-   (do not translate or alter them). Briefly mention when/how to apply.
-5. Do not try to fit in every step, variety name, or product option from the knowledge base —
-   this is a first, useful answer, not a recitation of the full knowledge base. Deliberately
-   leave other options/details unmentioned so there is something worthwhile left for the
-   farmer to ask about if needed.
+2. Brief explanation (1 sentence): what is happening to the plant, in simple terms — you may
+   draw this from the "symptoms" field.
+3. If the "management" field includes cultural/preventive steps, mention ONE of the most
+   practical ones briefly, using the wording/action given there. Do NOT turn a risk factor
+   from "favourable_conditions" (e.g. "close planting increases risk") into a recommended
+   action unless the "management" field itself separately instructs that action (e.g. "avoid
+   close planting") — those are two different fields for a reason.
+4. Chemical treatment: from the "management" field, choose only ONE, or at most TWO, of the
+   most practical/commonly used products — do NOT list every product option given. Keep the
+   product name(s), dosage, and units exactly as written (do not translate or alter them).
+   Only mention application timing (growth stage, days after sowing, repeat interval) if that
+   timing is explicitly written in the "management" field for that product — do not invent or
+   estimate a timing that isn't stated.
+5. Do not try to fit in every step, variety name, or product option from the "management"
+   field — this is a first, useful answer, not a recitation of the full knowledge base.
+   Deliberately leave other options/details unmentioned so there is something worthwhile left
+   for the farmer to ask about if needed.
 
 Instructions for your response:
 - Write your ENTIRE response in simple, natural, spoken Hindi (Devanagari script) — NOT

@@ -65,13 +65,20 @@ class DialogueManager:
         llm_decision = await get_fast_llm_completion(prompt, temperature=0.0)
         decision = llm_decision.strip().upper()
 
-        if "RICE" in decision:
+        if "OTHER_CROP" in decision:
+            # End the conversation if the farmer is asking about an unsupported crop
+            self.phase = "completed"
+            return "Maaf kijiyega, humari helpline abhi sirf Dhaan (Rice) aur Kapas (Cotton) ki bimariyon ke baare mein jaankari de sakti hai. Call karne ke liye dhanyawad, namaste."
+
+        elif "RICE" in decision:
             self.crop = "rice"
+
         elif "COTTON" in decision:
             self.crop = "cotton"
 
-        if not self.crop:
-            return "Maaf kijiyega, main theek se samajh nahi paaya. Yeh dhaan ki samasya hai ya kapas ki?"
+        elif "UNCLEAR" in decision or not self.crop:
+            # If the LLM is unsure, or if we hit a weird edge case fallback
+            return "Maaf kijiyega, main theek se samajh nahi paaya. Kya aap bata sakte hain ki yeh samasya dhaan (rice) ki hai ya kapas (cotton) ki?"
 
         # Crop is now known — combine EVERYTHING said so far (across however many
         # turns it took) into the symptom text used for retrieval, not just this
