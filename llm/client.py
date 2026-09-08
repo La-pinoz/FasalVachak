@@ -10,10 +10,15 @@ Two tiers of completion:
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
 from groq import AsyncGroq
+
+logging.getLogger("groq").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # Load .env from project root (two levels up from llm/client.py → llm/ → project root)
 load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent / ".env")

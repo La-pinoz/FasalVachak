@@ -25,7 +25,7 @@ if sys.platform == "win32":
 from dialogue.session import DialogueManager
 
 
-DEBUG = True  # set False to hide phase/latency info
+DEBUG = False  # set False to hide phase/latency info
 
 
 def print_debug(dm: DialogueManager, turn_latency: float | None = None) -> None:
