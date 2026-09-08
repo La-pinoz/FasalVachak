@@ -21,10 +21,10 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 from livekit.agents import stt as agents_stt
-from livekit.plugins import deepgram
+from livekit.plugins import deepgram, rime
 
 from dialogue.session import DialogueManager
-from tts.deepgram_tts import create_tts_client, play_audio
+from tts.rime_tts import create_tts_client, play_audio
 
 
 def safe_print(msg: str) -> None:
@@ -115,7 +115,7 @@ async def handle_stt_stream(
     room: rtc.Room,
     stt_client: deepgram.STT,
     session: DialogueManager,
-    tts_client: deepgram.TTS,
+    tts_client: rime.TTS,
 ) -> None:
     """
     Reads AudioFrames from the farmer's LiveKit track, feeds them to Deepgram
