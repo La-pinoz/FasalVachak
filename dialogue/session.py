@@ -1,6 +1,7 @@
 import re
+import random
 
-from llm.prompts import CROP_DETECTION_PROMPT, DISAMBIGUATION_PROMPT, FOLLOWUP_QA_PROMPT, INTENT_CLASSIFICATION_PROMPT, Summarize_Symptoms_PROMPT
+from llm.prompts import CROP_DETECTION_PROMPT, DISAMBIGUATION_PROMPT, FOLLOWUP_QA_PROMPT, INTENT_CLASSIFICATION_PROMPT, Summarize_Symptoms_PROMPT, QUESTION_RESOLUTION_PROMPT
 from llm.client import get_fast_llm_completion, get_reasoning_completion
 from rag.retriever import get_all_candidates, get_disease_record
 
@@ -8,8 +9,8 @@ from rag.retriever import get_all_candidates, get_disease_record
 # CONFIGURATION & CONSTANTS
 # ---------------------------------------------------------
 
-MAX_DISAMBIGUATION_QUESTIONS = 2
-MAX_FOLLOWUPS = 2
+MAX_DISAMBIGUATION_QUESTIONS = 4
+MAX_FOLLOWUPS = 4
 
 GENERIC_ERROR_REPLY = "Maaf kijiyega, thodi dikkat aa gayi. Kripya dobara boliye."
 NO_MATCH_REPLY = "Maaf kijiyega, lakshan ke aadhar par main sahi bimari nahi pehchaan paa raha hoon. Kripya krishi visheshagya se sampark karein."
@@ -21,7 +22,6 @@ CROP_HINDI_LABEL = {
     "COTTON": "kapas",
 }
 
-# UPDATED: Added Hindi & Roman Hindi affirmatives since translation is bypassed.
 BARE_AFFIRMATION_WORDS = {
     "yes", "yeah", "yep", "sure", "ok", "okay", "please", "alright", "fine",
     "haan", "ha", "haa", "ji", "bilkul", "theek", "thik", "sahi",
@@ -41,14 +41,21 @@ class DialogueManager:
         self.candidates_text = ""
         self.candidate_names = []
 
-        # STATE MACHINE: Maps phase name to its async handler method.
-        # This completely replaces the messy if/else block in process_turn.
+        # The question we most recently asked and are waiting on a reply to.
+        # Cleared once resolved (YES/NO) or once we move past symptom_diagnosis.
+        self.pending_question = None
+
+        # Every discriminator the farmer was NOT able to answer, ever, this
+        # call. These are permanently off-limits for re-asking (reworded or
+        # otherwise) — see DISAMBIGUATION_PROMPT's PENDING DISCRIMINATOR CHECK.
+        self.unresolved_features = []
+
         self._state_handlers = {
             "crop_detection": self._handle_crop_detection,
             "symptom_diagnosis": self._handle_symptom_diagnosis,
             "followup": self._handle_followup,
             "followup_elicit": self._handle_followup_elicit,
-            "completed": self._handle_completed
+            "completed": self._handle_completed,
         }
 
     async def process_turn(self, farmer_text_raw: str) -> str:
@@ -74,7 +81,6 @@ class DialogueManager:
 
     async def _handle_crop_detection(self, text: str) -> str:
         """Phase 0: Figure out the crop from raw text."""
-        # Accumulate in case they describe symptoms right away
         self.symptoms_text += f" {text}".strip()
 
         prompt = CROP_DETECTION_PROMPT.format(farmer_text=self.symptoms_text)
@@ -101,21 +107,48 @@ class DialogueManager:
             self.phase = "completed"
             return "Maaf kijiyega, abhi mere paas is fasal ki bimariyon ki jaankari uplabdh nahi hai. Kripya krishi visheshagya se sampark karein."
 
+        # Shuffle so the model can't develop a first-listed-wins bias
+        # (e.g. Blast always being candidate #1 for rice).
+        candidate_records = list(candidate_records)
+        random.shuffle(candidate_records)
+
         self.candidate_names = [r.get("disease_name", "")
                                 for r in candidate_records]
         self.candidates_text = self._format_candidates_text(candidate_records)
 
-        # Trigger the first LLM disambiguation immediately
         response = await self._trigger_llm_turn()
 
-        # Prepend the implied confirmation of the crop naturally
         label = CROP_HINDI_LABEL.get(self.crop, self.crop)
         return f"Achha, {label} ki fasal hai. {response}"
 
     async def _handle_symptom_diagnosis(self, text: str) -> str:
         """Phase 1: Handles the farmer's answers to our clarifying questions."""
         self.qa_history.append(f"Farmer: {text}")
-        return await self._trigger_llm_turn()
+
+        # Before calling the (expensive) reasoning model, resolve whether the
+        # farmer's reply actually answered the question we just asked. This
+        # is a small, deterministic check — same pattern as the bare
+        # affirmation / intent-classification gates below — so the big
+        # disambiguation prompt is handed a hard fact instead of having to
+        # infer it from free-text history.
+        pending_status = "NONE"
+        if self.pending_question:
+            resolution_prompt = QUESTION_RESOLUTION_PROMPT.format(
+                pending_question=self.pending_question,
+                farmer_reply=text,
+            )
+            raw = await get_fast_llm_completion(resolution_prompt, temperature=0.0)
+            status = raw.strip().upper()
+            pending_status = status if status in (
+                "YES", "NO", "UNRESOLVED") else "UNRESOLVED"
+
+            if pending_status == "UNRESOLVED":
+                # Retire this discriminator permanently — the farmer
+                # couldn't answer it once, so re-asking it (even reworded)
+                # is not useful and reads as not listening.
+                self.unresolved_features.append(self.pending_question)
+
+        return await self._trigger_llm_turn(pending_status=pending_status)
 
     async def _handle_followup(self, text: str) -> str:
         """Phase 3 gate: check if it's a bare 'yes' or a real question."""
@@ -140,19 +173,32 @@ class DialogueManager:
     # CORE LOGIC HELPERS
     # ---------------------------------------------------------
 
-    async def _trigger_llm_turn(self) -> str:
+    async def _trigger_llm_turn(self, pending_status: str = "NONE") -> str:
         """The Reasoning Engine for Phase 1 (Disambiguation)."""
         formatted_history = "\n".join(self.qa_history)
+        unresolved_features_text = (
+            "\n".join(f"- {q}" for q in self.unresolved_features)
+            if self.unresolved_features else "(none)"
+        )
+
         prompt = DISAMBIGUATION_PROMPT.format(
             symptom_text=self.symptoms_text,
             candidates=self.candidates_text,
             qa_history=formatted_history,
             questions_asked_so_far=self.questions_asked,
-            max_questions=MAX_DISAMBIGUATION_QUESTIONS
+            max_questions=MAX_DISAMBIGUATION_QUESTIONS,
+            pending_question=self.pending_question or "(none)",
+            pending_question_status=pending_status,
+            unresolved_features=unresolved_features_text,
         )
 
         llm_output = await get_reasoning_completion(prompt)
-        action, content = self._parse_action_content(llm_output)
+        analysis, action, content = self._parse_analysis_action_content(
+            llm_output)
+
+        # Best debugging signal for "why did it pick this" — log it, never
+        # surface it to the farmer.
+        print(f"[debug] analysis: {analysis}")
 
         if not action:
             return "Maaf kijiye, main theek se samajh nahi paaya. Kya aap lakshan dobara bata sakte hain?"
@@ -164,9 +210,11 @@ class DialogueManager:
 
             self.qa_history.append(f"Agent: {content}")
             self.questions_asked += 1
+            self.pending_question = content
             return content
 
         elif action == "ANSWER":
+            self.pending_question = None
             if content not in self.candidate_names:
                 self.phase = "completed"
                 return NO_MATCH_REPLY
@@ -174,6 +222,7 @@ class DialogueManager:
             return await self._announce_diagnosis()
 
         elif action == "NO_MATCH":
+            self.pending_question = None
             self.phase = "completed"
             return NO_MATCH_REPLY
 
@@ -190,12 +239,10 @@ class DialogueManager:
         self.identified_disease = kb_record.get(
             "disease_name", self.identified_disease)
 
-        # Extract only the symptoms bullets and combine them into a string
         bullets = kb_record.get("symptoms_bullets", [])
         symptoms_text = " ".join(
             bullets) if bullets else "Lakshan ki jankari uplabdh nahi hai."
 
-        # Generate the brief symptom profile using the LLM, passing only the symptoms
         summary_prompt = Summarize_Symptoms_PROMPT.format(
             disease=self.identified_disease,
             symptoms_text=symptoms_text
@@ -204,7 +251,6 @@ class DialogueManager:
 
         self.phase = "followup"
 
-        # Combine the original announcement, the LLM-generated symptoms, and the follow-up question
         return f"Aapke bataye gaye lakshano ke aadhar par, yeh samasya {self.identified_disease} lagti hai. {symptom_summary}\n\nKya aapko {self.identified_disease} ke baare mein jankari chahiye?"
 
     async def _answer_followup_question(self, text: str) -> str:
@@ -228,14 +274,6 @@ class DialogueManager:
     # ---------------------------------------------------------
     # UTILITY HELPERS
     # ---------------------------------------------------------
-
-    @staticmethod
-    def _parse_action_content(llm_output: str):
-        match = re.search(r"ACTION:\s*(\w+)\s*\n+CONTENT:\s*(.*)",
-                          llm_output.strip(), re.IGNORECASE | re.DOTALL)
-        if not match:
-            return None, None
-        return match.group(1).strip().upper(), match.group(2).strip()
 
     @staticmethod
     def _is_bare_affirmation(text: str) -> bool:
@@ -271,3 +309,21 @@ class DialogueManager:
             symptoms = " ".join(bullets) if bullets else "Not available."
             lines.append(f"{i}. {name}: {symptoms}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _parse_analysis_action_content(llm_output: str):
+        """Parses the required ANALYSIS / ACTION / CONTENT three-line output.
+
+        ANALYSIS is logged for debugging only — never shown to the farmer.
+        This replaces the old two-line ACTION/CONTENT parser: forcing the
+        model to state its analysis as graded output (rather than invisible
+        reasoning it could skip) is what actually made it check whether the
+        pending question was resolved before answering.
+        """
+        match = re.search(
+            r"ANALYSIS:\s*(.*?)\s*\n+ACTION:\s*(\w+)\s*\n+CONTENT:\s*(.*)",
+            llm_output.strip(), re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            return None, None, None
+        return match.group(1).strip(), match.group(2).strip().upper(), match.group(3).strip()
