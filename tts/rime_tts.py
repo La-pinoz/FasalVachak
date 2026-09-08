@@ -28,9 +28,7 @@ def create_tts_client() -> tuple[rime.TTS, aiohttp.ClientSession]:
     session = aiohttp.ClientSession()
     tts = rime.TTS(
         api_key=os.getenv("RIME_API_KEY"),
-        model="mistv3",
         lang="hin",
-        sample_rate=_SAMPLE_RATE,
         http_session=session,
     )
     return tts, session
@@ -69,6 +67,7 @@ async def play_audio(room: rtc.Room, text: str, tts: rime.TTS) -> None:
             await asyncio.sleep(total_duration_s + 0.3)   # +300 ms safety margin
 
     except Exception as exc:
-        print(f"[TTS] Synthesis error: {exc}")
+        print(f"\n[TTS ERROR] Failed to synthesize audio! Is your RIME_API_KEY valid? Error details: {exc}\n")
     finally:
         await room.local_participant.unpublish_track(publication.sid)
+
