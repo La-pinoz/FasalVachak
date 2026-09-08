@@ -10,35 +10,32 @@ Usage:
 
 import asyncio
 import sys
-import time  # CHANGED: added for latency measurement
+import time
 
 from dialogue.session import DialogueManager
 
-DEBUG = True  # set to False to hide phase/translation info
+DEBUG = True  # set to False to hide phase/latency info
 
 
-# CHANGED: added turn_latency param
 def print_debug(dm: DialogueManager, turn_latency: float = None):
     if not DEBUG:
         return
+
+    # State tracking output (Translation logs removed)
     print(f"    [debug] phase={dm.phase} | crop={dm.crop} | "
           f"questions_asked={dm.questions_asked} | followups_asked={dm.followups_asked}")
-    if dm.translation_log:
-        last_hindi, last_english = dm.translation_log[-1]
-        print(f"    [debug] translated: '{last_hindi}' -> '{last_english}'")
-    # CHANGED: new debug line — per-turn processing latency
+
     if turn_latency is not None:
         print(f"    [debug] turn latency: {turn_latency:.2f}s")
 
 
 async def main():
     dm = DialogueManager()
-    # CHANGED: marks start of the whole call, for cumulative timing
     call_start_time = time.monotonic()
 
     print("=" * 60)
     print("KrishiSeva Dialogue Test CLI")
-    print("Type your response as the farmer. Type 'quit' or 'exit' to stop.")
+    print("Type your response as the farmer (in Hindi/Hinglish). Type 'quit' or 'exit' to stop.")
     print("=" * 60)
     print()
     print("Agent: Namaste! Kripya bataiye, yeh dhaan ki samasya hai ya kapas ki, "
@@ -60,25 +57,24 @@ async def main():
             continue
 
         try:
-            # CHANGED: wrapped process_turn with timing — this measures the
-            # DialogueManager's own processing time (translation + LLM calls),
-            # NOT real STT/TTS latency, since neither is hooked up yet.
+            # Measures the DialogueManager's processing time (LLM calls)
             turn_start = time.monotonic()
+
+            # Text is now passed raw to the state machine, no translation step
             response = await dm.process_turn(farmer_input)
+
             turn_latency = time.monotonic() - turn_start
         except Exception as e:
             print(f"\n[ERROR] Something crashed: {e}")
             break
 
         print(f"\nAgent: {response}")
-        print_debug(dm, turn_latency)  # CHANGED: pass turn_latency through
+        print_debug(dm, turn_latency)
 
         if dm.phase == "completed":
-            # CHANGED: report total call duration alongside the existing message
             total_elapsed = time.monotonic() - call_start_time
             print(
                 "\n--- Call has ended (phase=completed). Restart the script for a new call. ---")
-            # CHANGED: new line
             print(
                 f"--- Total processing time this call: {total_elapsed:.2f}s ---")
             break
