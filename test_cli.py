@@ -16,6 +16,12 @@ import asyncio
 import sys
 import time
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        pass
+
 from dialogue.session import DialogueManager
 
 

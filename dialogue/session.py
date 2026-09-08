@@ -198,7 +198,12 @@ class DialogueManager:
 
         # Best debugging signal for "why did it pick this" — log it, never
         # surface it to the farmer.
-        print(f"[debug] analysis: {analysis}")
+        try:
+            print(f"[debug] analysis: {analysis}")
+        except UnicodeEncodeError:
+            import sys
+            sys.stdout.buffer.write((f"[debug] analysis: {analysis}\n").encode("utf-8", errors="replace"))
+            sys.stdout.buffer.flush()
 
         if not action:
             return "Maaf kijiye, main theek se samajh nahi paaya. Kya aap lakshan dobara bata sakte hain?"
