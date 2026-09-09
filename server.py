@@ -64,11 +64,18 @@ async def entrypoint(ctx: JobContext) -> None:
     def on_disconnected(*_args) -> None:
         disconnected_event.set()
 
+    # ── Create persistent Audio Track for TTS ─────────────────────────────────
+    from tts.rime_tts import _SAMPLE_RATE, _NUM_CHANNELS
+    audio_source = rtc.AudioSource(sample_rate=_SAMPLE_RATE, num_channels=_NUM_CHANNELS)
+    agent_track = rtc.LocalAudioTrack.create_audio_track("agent-voice", audio_source)
+    options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+    await ctx.room.local_participant.publish_track(agent_track, options)
+
     # ── Helper: start STT for a REMOTE participant's audio track only ────────
     def start_stt_for_track(track: rtc.Track, participant: rtc.RemoteParticipant) -> None:
         safe_print(f"[Server] Audio track from '{participant.identity}' — starting STT …")
         asyncio.create_task(
-            handle_stt_stream(track, ctx.room, stt_client, session, tts_client)
+            handle_stt_stream(track, audio_source, stt_client, session, tts_client)
         )
 
     # ── Handle tracks that arrive AFTER we connect (remote only) ─────────────
@@ -100,7 +107,7 @@ async def entrypoint(ctx: JobContext) -> None:
         "Aapki dhaan ya kapas ki fasal mein kya lakshan dikh rahe hain, "
         "kripya bataiye?"
     )
-    await play_audio(ctx.room, greeting, tts_client)
+    await play_audio(audio_source, greeting, tts_client)
 
     # ── Keep the job alive until the room disconnects ────────────────────────
     try:
@@ -112,7 +119,7 @@ async def entrypoint(ctx: JobContext) -> None:
 
 async def handle_stt_stream(
     track: rtc.Track,
-    room: rtc.Room,
+    audio_source: rtc.AudioSource,
     stt_client: deepgram.STT,
     session: DialogueManager,
     tts_client: rime.TTS,
@@ -153,7 +160,7 @@ async def handle_stt_stream(
 
         if next_response:
             safe_print(f"[Agent] Responding …")
-            await play_audio(room, next_response, tts_client)
+            await play_audio(audio_source, next_response, tts_client)
 
 
 if __name__ == "__main__":

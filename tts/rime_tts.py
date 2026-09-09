@@ -25,49 +25,38 @@ def create_tts_client() -> tuple[rime.TTS, aiohttp.ClientSession]:
     Create a fresh Rime TTS client + its own aiohttp session.
     Call this once at the start of each job (inside entrypoint).
     """
+    api_key = os.getenv("RIME_API_KEY")
+    if not api_key or api_key == "your_rime_api_key_here":
+        raise ValueError("\n\n>>> ❌ ERROR: RIME_API_KEY is missing! <<<\nYou MUST get a valid API key from https://app.rime.ai and replace 'your_rime_api_key_here' in your .env file.\n\n")
+
     session = aiohttp.ClientSession()
     tts = rime.TTS(
         api_key=os.getenv("RIME_API_KEY"),
+        speaker="nadi",
+        model="coda",
         lang="hin",
+        sample_rate=_SAMPLE_RATE,
         http_session=session,
     )
     return tts, session
 
 
-async def play_audio(room: rtc.Room, text: str, tts: rime.TTS) -> None:
+async def play_audio(source: rtc.AudioSource, text: str, tts: rime.TTS) -> None:
     """
-    Synthesise *text* using Rime TTS and broadcast audio into the LiveKit room.
-    Creates a LocalAudioTrack per utterance, pushes all TTS frames, unpublishes cleanly.
+    Synthesise *text* using Rime TTS and push audio frames to the persistent LiveKit track.
 
     Args:
-        room: The LiveKit room to publish audio into.
+        source: The persistent AudioSource connected to the room.
         text: The text to synthesise.
         tts:  The per-job TTS client (created via create_tts_client()).
     """
     if not text or not text.strip():
         return
 
-    source = rtc.AudioSource(sample_rate=_SAMPLE_RATE, num_channels=_NUM_CHANNELS)
-    track = rtc.LocalAudioTrack.create_audio_track("agent-voice", source)
-    pub_options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-    publication = await room.local_participant.publish_track(track, pub_options)
-
-    total_duration_s = 0.0
     try:
         async with tts.synthesize(text) as tts_stream:
             async for synthesized in tts_stream:
-                frame = synthesized.frame
-                # Accumulate audio duration so we can drain the buffer before unpublishing
-                total_duration_s += frame.samples_per_channel / frame.sample_rate
-                await source.capture_frame(frame)
-
-        # Wait for the audio that is still in the LiveKit audio buffer to finish
-        # playing before we tear down the track (prevents cutoff).
-        if total_duration_s > 0:
-            await asyncio.sleep(total_duration_s + 0.3)   # +300 ms safety margin
-
+                # capture_frame blocks and naturally paces the audio to realtime
+                await source.capture_frame(synthesized.frame)
     except Exception as exc:
-        print(f"\n[TTS ERROR] Failed to synthesize audio! Is your RIME_API_KEY valid? Error details: {exc}\n")
-    finally:
-        await room.local_participant.unpublish_track(publication.sid)
-
+        print(f"[TTS] Synthesis error: {exc}")
