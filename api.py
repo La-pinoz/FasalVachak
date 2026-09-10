@@ -155,25 +155,10 @@ def _mint_token(room_name: str, participant_identity: str) -> str:
 
 @app.get("/", summary="Serve the FasalVachak frontend", include_in_schema=False)
 async def index() -> FileResponse:
-    """
-    Return the static HTML/JS client.
-    The browser calls POST /connect from this page, so they share the same
-    origin and no CORS configuration is needed.
-    """
-    html_path = _STATIC_DIR / "index.html"
+    html_path = Path(__file__).resolve().parent / "templates" / "index.html"
     if not html_path.exists():
-        from fastapi import HTTPException as _HTTPException
-        raise _HTTPException(status_code=404, detail="Frontend not found. Run from the project root.")
+        raise HTTPException(status_code=404, detail="Frontend not found.")
     return FileResponse(str(html_path), media_type="text/html")
-
-
-from fastapi.responses import HTMLResponse
-
-@app.get("/", response_class=HTMLResponse)
-def root():
-    with open("templates/index.html", "r") as f:
-        return f.read()
-
 
 @app.post("/connect", summary="Obtain a LiveKit token and join a new room")
 async def connect() -> dict:
