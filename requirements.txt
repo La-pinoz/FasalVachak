@@ -10,3 +10,12 @@ groq>=0.37.0
 # Async HTTP & Environment
 aiohttp>=3.10.0
 python-dotenv>=1.0.0
+
+# Token + Dispatch API server (api.py)
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+# livekit-api is already pulled in transitively by livekit-agents,
+# but pinned here explicitly so Railway installs it when running api.py alone.
+livekit-api>=1.2.0
+# Required by FastAPI StaticFiles (serves static/index.html at GET /)
+aiofiles>=23.0.0
