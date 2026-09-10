@@ -57,7 +57,7 @@ flowchart LR
 - [LiveKit](https://livekit.io/) and [livekit-agents](https://docs.livekit.io/agents/) for real-time voice rooms and agent workers
 - [LiveKit JavaScript client](https://github.com/livekit/client-sdk-js), loaded from [jsDelivr](https://www.jsdelivr.com/), for browser room connections
 - [Deepgram](https://deepgram.com/) Nova-2 Hindi speech-to-text
-- [Rime](https://rime.ai/) Coda Hindi text-to-speech
+- [Rime](https://rime.ai/) Coda Model, Speaker 'Nadi' for Hindi text-to-speech
 - [Groq](https://groq.com/) with the `openai/gpt-oss-120b` model for crop classification, intent checks, symptom summarization, and diagnosis reasoning
 - [ChromaDB](https://www.trychroma.com/) and [Sentence Transformers](https://www.sbert.net/) in [`rag/ingest.py`](./rag/ingest.py) for optional symptom-vector indexing
 - [aiohttp](https://docs.aiohttp.org/) for asynchronous TTS HTTP sessions
