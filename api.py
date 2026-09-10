@@ -167,9 +167,12 @@ async def index() -> FileResponse:
     return FileResponse(str(html_path), media_type="text/html")
 
 
-@app.get("/health", summary="Liveness check")
-async def health() -> dict:
-    return {"status": "ok"}
+from fastapi.responses import HTMLResponse
+
+@app.get("/", response_class=HTMLResponse)
+def root():
+    with open("templates/index.html", "r") as f:
+        return f.read()
 
 
 @app.post("/connect", summary="Obtain a LiveKit token and join a new room")
