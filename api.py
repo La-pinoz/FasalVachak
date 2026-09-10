@@ -1,11 +1,25 @@
 # api.py
 """
-FasalVachak — LiveKit token + agent-dispatch HTTP endpoint.
+FasalVachak — LiveKit token HTTP endpoint.
 
 Provides:
     POST /connect  →  generates a LiveKit room, mints a short-lived JWT,
-                      dispatches the voice agent, and returns connection details.
+                      and returns connection details.
     GET  /health   →  simple liveness check.
+
+Agent dispatch note:
+    server.py registers its worker via WorkerOptions(entrypoint_fnc=entrypoint)
+    with no explicit agent_name, which means it uses LiveKit's AUTOMATIC
+    DISPATCH — the worker is spawned into every new room on its own. This
+    endpoint therefore does NOT issue an explicit agent-dispatch request;
+    doing so alongside automatic dispatch would spawn two agent jobs into
+    the same room (one via auto-dispatch, one via the explicit call),
+    causing duplicate STT streams and the "agent can't hear me" symptom.
+
+    If you later switch server.py to explicit dispatch (by setting
+    agent_name="fasalvachak" in WorkerOptions), reintroduce a matching
+    explicit dispatch call here with the same agent_name — but never both
+    automatic and explicit dispatch for the same worker.
 
 Environment variables (same names used by server.py):
     LIVEKIT_URL        wss://your-project.livekit.cloud
@@ -34,8 +48,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from livekit.api import (
     AccessToken,
-    CreateAgentDispatchRequest,
-    LiveKitAPI,
     VideoGrants,
 )
 
@@ -47,11 +59,6 @@ LIVEKIT_API_SECRET: str = os.environ.get("LIVEKIT_API_SECRET", "")
 
 # Token TTL: 10 minutes — short-lived so a stale URL can't be reused.
 _TOKEN_TTL: timedelta = timedelta(seconds=600)
-
-# Agent name that the worker registered under.
-# server.py uses WorkerOptions(entrypoint_fnc=entrypoint) with no agent_name,
-# which means the worker registers with agent_name="" in livekit-agents v1.x.
-_AGENT_NAME: str = ""
 
 
 def _check_env() -> None:
@@ -81,7 +88,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="FasalVachak API",
-    description="Token + agent-dispatch endpoint for the FasalVachak LiveKit voice agent.",
+    description="Token endpoint for the FasalVachak LiveKit voice agent.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -144,29 +151,6 @@ def _mint_token(room_name: str, participant_identity: str) -> str:
     return token.to_jwt()
 
 
-async def _dispatch_agent(room_name: str) -> None:
-    """
-    Ask the LiveKit server to dispatch the registered voice-agent worker
-    into *room_name*.
-
-    server.py registers with WorkerOptions(entrypoint_fnc=entrypoint) and
-    no explicit agent_name, so the worker is registered under agent_name="".
-    If you later set agent_name="fasalvachak" in WorkerOptions, update
-    _AGENT_NAME above to match.
-    """
-    async with LiveKitAPI(
-        url=LIVEKIT_URL,
-        api_key=LIVEKIT_API_KEY,
-        api_secret=LIVEKIT_API_SECRET,
-    ) as lk:
-        await lk.agent_dispatch.create_dispatch(
-            CreateAgentDispatchRequest(
-                room=room_name,
-                agent_name=_AGENT_NAME,
-            )
-        )
-
-
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 @app.get("/", summary="Serve the FasalVachak frontend", include_in_schema=False)
@@ -191,8 +175,12 @@ async def health() -> dict:
 @app.post("/connect", summary="Obtain a LiveKit token and join a new room")
 async def connect() -> dict:
     """
-    Generate a unique room, mint a farmer JWT, dispatch the voice agent,
-    and return the connection details needed by the browser client.
+    Generate a unique room and mint a farmer JWT, returning the connection
+    details needed by the browser client.
+
+    The voice-agent worker (server.py) uses LiveKit's automatic dispatch,
+    so it joins the room on its own once the farmer connects — no explicit
+    dispatch call is made here (see module docstring for why).
 
     Returns:
         {
@@ -209,12 +197,6 @@ async def connect() -> dict:
         token = _mint_token(room_name, participant_identity)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Token generation failed: {exc}")
-
-    try:
-        await _dispatch_agent(room_name)
-    except Exception as exc:
-        # If dispatch fails the browser can't talk to an agent — surface the error.
-        raise HTTPException(status_code=502, detail=f"Agent dispatch failed: {exc}")
 
     return {
         "token": token,
