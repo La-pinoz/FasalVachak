@@ -4,6 +4,12 @@
 
 FasalVachak is a Hindi voice assistant for diagnosing rice and cotton crop diseases. It connects farmers to a LiveKit voice agent that transcribes speech, reasons over a curated disease knowledge base, and responds with spoken guidance.
 
+- **The Target User:** Indian farmers with limited tech literacy.
+- **The Problem:** Text-based agricultural apps are inaccessible. They need a voice-native helpline to diagnose crop diseases.
+- **Necessity of Voice:** If you remove voice, the product is completely unusable by the target demographic. Voice is the product.
+- **Hard Voice Problem:** Multilingual / code-switched speech & controlled delivery. The agent must understand broken Hinglish/Hindi, navigate a strict decision tree without hallucinating, and speak back using natural, native-sounding Hindi (via Rime's `nadi` voice).
+- **The Stress Case:** The user asks for information outside the knowledge base (e.g., medicine prices or an unsupported crop like sugarcane). The agent must gracefully decline rather than hallucinate, and Rime must deliver this fallback naturally.
+
 ## Architecture diagram
 
 ```mermaid
