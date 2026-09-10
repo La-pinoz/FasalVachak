@@ -29,6 +29,15 @@ Environment variables (same names used by server.py):
 """
 
 from __future__ import annotations
+from livekit.api import (
+    AccessToken,
+    VideoGrants,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException
+import uvicorn
 
 import os
 import uuid
@@ -41,15 +50,6 @@ from dotenv import load_dotenv
 # Load .env when running locally; Railway supplies real env vars at runtime.
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
-import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from livekit.api import (
-    AccessToken,
-    VideoGrants,
-)
 
 # ── Configuration (validated at startup) ────────────────────────────────────
 
@@ -160,6 +160,12 @@ async def index() -> FileResponse:
         raise HTTPException(status_code=404, detail="Frontend not found.")
     return FileResponse(str(html_path), media_type="text/html")
 
+
+@app.get("/health", summary="Health check", include_in_schema=False)
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.post("/connect", summary="Obtain a LiveKit token and join a new room")
 async def connect() -> dict:
     """
@@ -184,7 +190,8 @@ async def connect() -> dict:
     try:
         token = _mint_token(room_name, participant_identity)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Token generation failed: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Token generation failed: {exc}")
 
     return {
         "token": token,

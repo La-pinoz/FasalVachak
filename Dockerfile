@@ -21,5 +21,6 @@ RUN pip install -r requirements.txt
 # 4. Copy application source code (relies on .dockerignore to skip venv, .env, etc.)
 COPY . .
 
-# 5. Run the LiveKit worker process
-CMD ["python", "server.py", "start"]
+# 5. Run the HTTP service. The LiveKit worker is deployed as a separate
+# Railway service using: python server.py start
+CMD ["python", "api.py"]
